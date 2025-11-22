@@ -1,0 +1,32 @@
+# Fill your keys as environment variables, or inline here (not recommended).
+# You can also use a .env file at the project root.
+
+default:
+  out_dir: "out"
+  repeats: 30
+  size: "512x512"     # SDXL nativo
+  temperature: null
+  randomize_order: true
+  concurrency: 2       # tu 4080 puede con 2 en paralelo
+  delay_seconds: 0
+  seed: -1           # fija para comparabilidad (pon null para aleatorio)
+
+providers:
+  openai:
+    enabled: false
+    model: "gpt-image-1"
+    api_key_env: "OPENAI_API_KEY"
+
+  stability:
+    enabled: false
+    engine: "sd3"
+    api_base: "https://api.stability.ai"
+    api_key_env: "STABILITY_API_KEY"
+
+  automatic1111:
+    enabled: true
+    api_base: "http://127.0.0.1:7860"
+    sampler_name: "DPM++ 2M Automatic"
+    steps: 80
+    cfg_scale: 7
+    seed: -1
