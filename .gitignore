@@ -1,0 +1,20 @@
+﻿# venvs
+batchkit/.venv/
+.venv/
+
+# outputs y temporales
+out/
+**/__pycache__/
+*.pyc
+*.log
+
+# A1111 en runtime (lo trae vendors/ y bootstrap)
+stable-diffusion-webui/
+
+# Vendors: incluimos EXEs pero NO el árbol completo de A1111 por defecto
+vendors/*
+!vendors/python-3.10.11-amd64.exe
+!vendors/Git-2.52.0-64-bit.exe
+!vendors/stable-diffusion-webui/README.txt
+# Si DECIDES versionar A1111 completo (poco recomendable por tamaño),
+# comenta las 2 líneas anteriores y usa Git LFS.
