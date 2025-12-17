@@ -6,8 +6,7 @@
 # - Forzamos --out al ejecutar lote/test
 # - Bloque de WebUI sólo visible con proveedor automatic1111
 # - Selector de CSV de prompts (por defecto PROJECT/prompts_template.csv)
-
-import os, sys, subprocess, threading, time, webbrowser, yaml, pathlib, requests, tkinter as tk
+import os, sys, subprocess, threading, time, webbrowser, yaml, pathlib, requests, shutil, tkinter as tk
 from tkinter import filedialog, scrolledtext, simpledialog
 from tkinter import ttk
 
@@ -64,6 +63,67 @@ def ensure_venv_and_reqs(log):
 def _abs_out_from_gui(outdir_str: str) -> pathlib.Path:
     p = pathlib.Path(outdir_str or "out")
     return p if p.is_absolute() else (PROJECT / p).resolve()
+
+# --------- helpers A1111 ----------
+def patch_a1111_repo_urls(webui_dir, log):
+    """
+    Parchea modules/launch_utils.py para reemplazar:
+      https://github.com/Stability-AI/stablediffusion.git  ->  https://github.com/CompVis/stable-diffusion.git
+    Idempotente.
+    """
+    try:
+        lu = pathlib.Path(webui_dir) / "modules" / "launch_utils.py"
+        if not lu.exists():
+            log("Aviso: no encuentro modules/launch_utils.py; omito parche.")
+            return
+        txt = lu.read_text(encoding="utf-8", errors="ignore")
+        old = "https://github.com/Stability-AI/stablediffusion.git"
+        new = "https://github.com/CompVis/stable-diffusion.git"
+        if old in txt:
+            log("Parcheando URL del repo SD (Stability-AI -> CompVis)…")
+            txt = txt.replace(old, new)
+            lu.write_text(txt, encoding="utf-8")
+            log("✓ Parche aplicado.")
+    except Exception as e:
+        log(f"Aviso: no se pudo aplicar parche de repos: {e}")
+
+def _find_vendors_root():
+    # vendors puede estar en PROJECT/ o en batchkit/
+    a = PROJECT / "vendors"
+    b = KIT / "vendors"
+    if a.exists(): return a
+    if b.exists(): return b
+    return None
+
+def seed_local_repos(webui_dir, log):
+    """
+    Si existen repos predescargados en vendors/repositories/*,
+    los copia a stable-diffusion-webui/repositories antes de arrancar.
+    Así A1111 no intenta clonar.
+    """
+    try:
+        vendors = _find_vendors_root()
+        if not vendors: 
+            return
+        src = vendors / "repositories"
+        dst = pathlib.Path(webui_dir) / "repositories"
+        if not src.exists():
+            return
+        dst.mkdir(parents=True, exist_ok=True)
+        copied_any = False
+        for child in src.iterdir():
+            if not child.is_dir(): 
+                continue
+            target = dst / child.name
+            if target.exists():
+                continue
+            log(f"Sembrando repo local: {child.name}")
+            shutil.copytree(child, target)
+            copied_any = True
+        if copied_any:
+            log("✓ Repos locales copiados a webui/repositories.")
+    except Exception as e:
+        log(f"Aviso: no se pudieron sembrar repos locales: {e}")
 
 # --------- Tooltips ----------
 class Tooltip:
@@ -351,12 +411,9 @@ class App(tb.Window if tb else tk.Tk):
         ttk.Button(act, text="Parar Lote", command=self.on_stop_batch).pack(side="left")
         ttk.Button(act, text="Test imagen", command=self.on_test_image).pack(side="left", padx=12)
         ttk.Button(act, text="Abrir carpeta de salida", command=self.open_out).pack(side="left")
-
-        # Selector de CSV de prompts (reemplaza al antiguo botón Abrir prompts.csv)
         ttk.Button(act, text="Elegir CSV de prompts…", command=self.browse_prompts_csv).pack(side="left", padx=6)
         self.lbl_prompts = ttk.Label(act, text=f"CSV: {self._shorten(self.prompts_path)}")
         self.lbl_prompts.pack(side="left", padx=8)
-
         ttk.Button(act, text="Limpiar log", command=self.clear_log).pack(side="right")
 
         # --- Log RO ---
@@ -370,10 +427,10 @@ class App(tb.Window if tb else tk.Tk):
         s = str(p)
         return s if len(s) <= maxlen else "…" + s[-(maxlen-1):]
 
-    def clear_log(self): 
+    def clear_log(self):
         self.logbox.configure(state="normal"); self.logbox.delete("1.0", tk.END); self.logbox.configure(state="disabled")
 
-    def log(self, msg): 
+    def log(self, msg):
         self.logbox.configure(state="normal"); self.logbox.insert(tk.END, msg+"\n"); self.logbox.see(tk.END); self.logbox.configure(state="disabled")
 
     def _initial_provider_name(self):
@@ -430,6 +487,11 @@ class App(tb.Window if tb else tk.Tk):
             self.log("Selecciona la carpeta de Stable Diffusion WebUI."); return
         if self.webui_proc and self.webui_proc.poll() is None:
             self.log("WebUI ya está ejecutándose."); return
+
+        # Antes de lanzar: siembra repos locales (si existen) y parchea URL rota
+        seed_local_repos(self.webui_var.get(), self.log)
+        patch_a1111_repo_urls(self.webui_var.get(), self.log)
+
         self.webui_proc = start_webui(self.webui_var.get(), self.log)
         self.log("Esperando API 7860…")
         threading.Thread(target=self._wait_and_report_api, daemon=True).start()
@@ -554,7 +616,7 @@ class App(tb.Window if tb else tk.Tk):
             set_batch_proc=self.set_batch_proc,
             on_finish=lambda: self.log("Fin de lote."),
             extra_args=["--out", str(_abs_out_from_gui(self.outdir_var.get()))],
-            prompts_path=str(self.prompts_path)  # <-- usa el CSV elegido (absoluto)
+            prompts_path=str(self.prompts_path)
         )
 
     def on_stop_batch(self):

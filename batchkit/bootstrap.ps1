@@ -79,6 +79,7 @@ function Install-Python310 {
 $pyLocalExe     = Join-Path $vendorsDir "python-3.10.11-amd64.exe"
 $localA1111Dir  = Join-Path $vendorsDir "stable-diffusion-webui"      # carpeta ya descomprimida
 $localA1111Zip  = Join-Path $vendorsDir "stable-diffusion-webui.zip"  # opcional
+$localReposDir  = Join-Path $vendorsDir "repositories"                # opcional: repos precargados
 $zipUrlA1111    = "https://codeload.github.com/AUTOMATIC1111/stable-diffusion-webui/zip/refs/heads/master"
 
 # ---------------- Python 3.10 ----------------
@@ -124,6 +125,51 @@ if (-not (Test-Path $webuiDir)) {
   Write-Host "Carpeta A1111 ya existe; se reutiliza."
 }
 
+# ---- Parchear launch_utils.py: repo SD -> CompVis y quitar commit pin ----
+$launchUtils = Join-Path $webuiDir "modules\launch_utils.py"
+if (Test-Path $launchUtils) {
+  try {
+    $txt = Get-Content -Path $launchUtils -Raw -Encoding UTF8
+
+    Copy-Item $launchUtils ($launchUtils + ".bak") -Force
+
+    # 1) Cambiar repo roto de Stability-AI por CompVis
+    $oldRepo = 'https://github.com/Stability-AI/stablediffusion.git'
+    $newRepo = 'https://github.com/CompVis/stable-diffusion.git'
+    if ($txt -like "*$oldRepo*") {
+      Write-Host 'Parcheando URL del repo SD (Stability-AI -> CompVis)...' -ForegroundColor Yellow
+      $txt = $txt.Replace($oldRepo, $newRepo)
+    }
+
+    # 2) Desanclar commits (siempre): si hay carpeta, NO toca git
+    $txt = [System.Text.RegularExpressions.Regex]::Replace(
+      $txt,
+      '(?m)^(?<indent>\s*)(stable_diffusion_xl_commit_hash|k_diffusion_commit_hash|blip_commit_hash|assets_commit_hash)\s*=.*$',
+      '${indent}$2 = None'
+    )
+
+    Set-Content -Path $launchUtils -Value $txt -Encoding UTF8
+    Write-Host '✓ launch_utils.py parcheado (repo y commit hash).' -ForegroundColor Green
+  } catch {
+    Write-Host ('Aviso: no se pudo parchear launch_utils.py: ' + $_.Exception.Message) -ForegroundColor DarkYellow
+  }
+}
+
+
+# ---- Si hay repos locales en vendors/repositories, copiarlos (evita git clone) ----
+$dstRepos = Join-Path $webuiDir "repositories"
+if (Test-Path $localReposDir) {
+  Ensure-Dir $dstRepos
+  Get-ChildItem -Path $localReposDir -Directory | ForEach-Object {
+    $name = $_.Name
+    $dst = Join-Path $dstRepos $name
+    if (-not (Test-Path $dst)) {
+      Write-Host "Sembrando repo local: $name" -ForegroundColor Green
+      Copy-Item -Path $_.FullName -Destination $dst -Recurse -Force
+    }
+  }
+}
+
 # ---------------- Detectar GPU ----------------
 function Has-Nvidia {
   try { $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c","nvidia-smi" -NoNewWindow -PassThru -Wait; return ($p.ExitCode -eq 0) }
@@ -136,13 +182,21 @@ else { Write-Host "No se detecta GPU NVIDIA. Se configurará modo CPU." -Foregro
 # ---------------- webui-user.bat ----------------
 $cmdArgs = if ($hasNvidia) { "--api --xformers --medvram" } else { "--api --use-cpu all --no-half --no-half-vae --medvram --skip-torch-cuda-test" }
 $webuiUser = Join-Path $webuiDir "webui-user.bat"
-@"
+
+# Usamos plantilla sin expansión y luego reemplazamos tokens para evitar errores de parser
+$batTemplate = @'
 @echo off
-set "PYTHON=$PY"
+set "PYTHON=__PY__"
 set VENV_DIR=
-set "COMMANDLINE_ARGS=$cmdArgs"
+set "COMMANDLINE_ARGS=__ARGS__"
+
+REM Forzar repo válido para Stable Diffusion (evita el 404 de Stability-AI)
+set "STABLE_DIFFUSION_REPO=https://github.com/CompVis/stable-diffusion.git"
+
 call webui.bat
-"@ | Out-File -FilePath $webuiUser -Encoding ASCII -Force
+'@
+$batContent = $batTemplate.Replace('__PY__', $PY).Replace('__ARGS__', $cmdArgs)
+Set-Content -Path $webuiUser -Value $batContent -Encoding ASCII -Force
 Write-Host "webui-user.bat configurado." -ForegroundColor Green
 
 # ---------------- Recordatorio modelos ----------------
@@ -166,11 +220,11 @@ if (Test-Path $req) { & $venvPy -m pip install -r $req }
 # ---------------- Arrancar WebUI (oculto, en paralelo) ----------------
 Write-Host "Arrancando Stable Diffusion WebUI (oculto)..." -ForegroundColor Cyan
 
-# 1) Creamos (si no existe) un lanzador VBScript que ejecuta un .bat oculto
+# 1) VBScript para ejecutar .bat oculto (si no existe)
 $runHiddenVbs = Join-Path $vendorsDir "run_hidden.vbs"
 if (-not (Test-Path $runHiddenVbs)) {
-  @"
-' run_hidden.vbs — ejecuta un .bat oculto, situando el CWD al del .bat
+  $vb = @'
+' run_hidden.vbs - ejecuta un .bat oculto, situando el CWD al del .bat
 If WScript.Arguments.Count = 0 Then WScript.Quit 1
 Set fso = CreateObject("Scripting.FileSystemObject")
 batPath = WScript.Arguments(0)
@@ -178,19 +232,14 @@ If Not fso.FileExists(batPath) Then WScript.Quit 2
 Set shell = CreateObject("WScript.Shell")
 shell.CurrentDirectory = fso.GetParentFolderName(batPath)
 cmd = "cmd.exe /c call " & Chr(34) & batPath & Chr(34)
-' 0 = oculto, False = no esperar
 shell.Run cmd, 0, False
-"@ | Out-File -FilePath $runHiddenVbs -Encoding ASCII -Force
+'@
+  Set-Content -Path $runHiddenVbs -Value $vb -Encoding ASCII -Force
 }
 
-# 2) Lanzamos webui-user.bat oculto con wscript.exe
-$webuiUser = Join-Path $webuiDir "webui-user.bat"
-if (-not (Test-Path $webuiUser)) {
-  Write-Host "ERROR: no existe $webuiUser" -ForegroundColor Red
-  exit 1
-}
+# 2) Lanzamos webui-user.bat oculto
+if (-not (Test-Path $webuiUser)) { Write-Host "ERROR: no existe $webuiUser" -ForegroundColor Red; exit 1 }
 Start-Process -FilePath "wscript.exe" -ArgumentList "`"$runHiddenVbs`"","`"$webuiUser`"" | Out-Null
-
 
 # ---------------- Probar API (rápido) ----------------
 function Test-A1111Api {
