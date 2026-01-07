@@ -47,7 +47,6 @@ class RunConfig:
 
 @dataclass
 class ProviderConfig:
-    enabled: bool = False
     model: Optional[str] = None
     api_key_env: Optional[str] = None
     engine: Optional[str] = None
@@ -115,20 +114,48 @@ def gen_openai(prompt: str, size: str, model: str, api_key: str) -> Dict[str, An
     img_bytes = base64.b64decode(b64)
     return {"image_bytes": img_bytes, "raw_response": resp.to_dict()}
 
-def gen_stability(prompt: str, size: str, engine: str, api_base: str, api_key: str, seed: Optional[int] = None) -> Dict[str, Any]:
+def gen_stability(
+    prompt: str,
+    size: str,
+    engine: str,
+    api_base: str,
+    api_key: str,
+    seed: Optional[int] = None
+) -> Dict[str, Any]:
+
     w, h = (int(x) for x in size.split("x"))
     url = f"{api_base}/v2beta/stable-image/generate/{engine}"
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "image/*,application/json"}
-    data = {"prompt": prompt, "output_format": "png", "width": w, "height": h}
-    if seed is not None: data["seed"] = seed
-    r = requests.post(url, headers=headers, data=data, timeout=300)
-    if r.status_code == 200 and r.headers.get("Content-Type","").startswith("image"):
-        return {"image_bytes": r.content, "raw_response": {"headers": dict(r.headers)}}
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "image/*"
+    }
+
+    files = {
+        "prompt": (None, prompt),
+        "width": (None, str(w)),
+        "height": (None, str(h)),
+        "output_format": (None, "png"),
+    }
+
+    if seed is not None and int(seed) >= 0:
+        files["seed"] = (None, str(seed))
+
+    r = requests.post(url, headers=headers, files=files, timeout=300)
+
+    if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("image"):
+        return {
+            "image_bytes": r.content,
+            "raw_response": {"headers": dict(r.headers)}
+        }
+
     try:
         err = r.json()
     except Exception:
         err = {"text": r.text, "status": r.status_code}
+
     raise RuntimeError(f"Stability API error: {err}")
+
 
 def gen_automatic1111(prompt: str, size: str, api_base: str, sampler_name: str, steps: int, cfg_scale: float, seed: int) -> Dict[str, Any]:
     w, h = (int(x) for x in size.split("x"))
@@ -180,7 +207,6 @@ def main():
     providers = cfg.get("providers", {})
     pconf = providers.get(args.provider, {})
     pc = ProviderConfig(
-        enabled = bool(pconf.get("enabled", False)),
         model = pconf.get("model"),
         api_key_env = pconf.get("api_key_env"),
         engine = pconf.get("engine"),
@@ -189,8 +215,6 @@ def main():
         steps = pconf.get("steps"),
         cfg_scale = pconf.get("cfg_scale"),
     )
-    if not pc.enabled:
-        print(f"WARNING: Provider '{args.provider}' is disabled in config. Continuing anyway.", file=sys.stderr)
 
     prompts = load_prompts_csv(args.prompts)
     if rc.randomize_order:

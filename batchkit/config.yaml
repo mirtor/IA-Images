@@ -10,17 +10,17 @@ default:
 providers:
   automatic1111:
     api_base: http://127.0.0.1:7860
-    cfg_scale: 7.0
-    enabled: true
     sampler_name: DPM++ 2M Karras
-    seed: -1
     steps: 40
+    cfg_scale: 7.0
+    seed: -1
+
   openai:
-    api_key_env: OPENAI_API_KEY
-    enabled: false
     model: gpt-image-1
+    api_key_env: OPENAI_API_KEY
+
   stability:
     api_base: https://api.stability.ai
     api_key_env: STABILITY_API_KEY
-    enabled: false
     engine: sd3
+

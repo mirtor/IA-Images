@@ -52,7 +52,7 @@ def ensure_venv_and_reqs(log):
         log("Creando venv del kit…")
         subprocess.check_call([sys.executable, "-m", "venv", str(KIT/".venv")])
     py = str(venv_py)
-    log("Instalando requisitos del kit…")
+    log("Preparando entorno (solo la primera vez)…")
     subprocess.check_call([py, "-m", "pip", "install", "--upgrade", "pip"])
     req = KIT / "requirements.txt"
     if req.exists():
@@ -230,6 +230,7 @@ class App(tb.Window if tb else tk.Tk):
         self.webui_proc = None
         self.batch_proc = None
         self.running_batch = False
+        self.env_ready = False
 
         # ---- prompts CSV seleccionado (por defecto: PROJECT/prompts_template.csv o KIT/prompts.csv)
         default_prompts = PROJECT / "prompts_template.csv"
@@ -250,11 +251,14 @@ class App(tb.Window if tb else tk.Tk):
         # --- DEFAULT PARAMS ---
         frm_def = ttk.LabelFrame(self, text="Parámetros por defecto (config.yaml)")
         frm_def.pack(fill="x", padx=12, pady=6)
-        d = self.cfg.get("default",{})
+        d = self.cfg.get("default", {})
 
-        def add_row(r, label, var, width, tip):
-            ttk.Label(frm_def, text=label).grid(row=r, column=0, sticky="w", padx=(6,2), pady=3)
-            ent = ttk.Entry(frm_def, textvariable=var, width=width); ent.grid(row=r, column=1, sticky="w", padx=6, pady=3)
+        def add_cell(row, col, label, var, width, tip):
+            ttk.Label(frm_def, text=label).grid(
+                row=row, column=col, sticky="w", padx=(6,2), pady=3
+            )
+            ent = ttk.Entry(frm_def, textvariable=var, width=width)
+            ent.grid(row=row, column=col+1, sticky="w", padx=(0,10), pady=3)
             Tooltip(ent, tip)
             return ent
 
@@ -263,22 +267,31 @@ class App(tb.Window if tb else tk.Tk):
         self.conc_var    = tk.StringVar(value=str(d.get("concurrency",1)))
         self.delay_var   = tk.StringVar(value=str(d.get("delay_seconds",0)))
         self.seed_var    = tk.StringVar(value=str(d.get("seed",-1)))
-        self.temp_var    = tk.StringVar(value="" if d.get("temperature") is None else str(d.get("temperature")))
+        self.temp_var    = tk.StringVar(
+            value="" if d.get("temperature") is None else str(d.get("temperature"))
+        )
         self.rand_var    = tk.BooleanVar(value=bool(d.get("randomize_order",True)))
 
-        r=0
-        add_row(r, "Size", self.size_var, 10, "Tamaño WxH (p. ej. 512x512, 1024x1024)."); r+=1
-        add_row(r, "Repeats", self.repeats_var, 6, "Nº de repeticiones por prompt."); r+=1
-        add_row(r, "Concurrency", self.conc_var, 6, "Prompts procesados a la vez (subir con cuidado)."); r+=1
-        add_row(r, "Delay (s)", self.delay_var, 6, "Pausa entre llamadas (segundos)."); r+=1
-        add_row(r, "Seed", self.seed_var, 10, "Semilla global (-1 aleatoria)."); r+=1
-        add_row(r, "Temperature", self.temp_var, 6, "Para proveedores que lo soporten (OpenAI/Stability)."); r+=1
+        # Fila 0
+        add_cell(0, 0, "Size",        self.size_var,    10, "Tamaño WxH (p. ej. 512x512)")
+        add_cell(0, 2, "Repeats",     self.repeats_var, 6,  "Nº de repeticiones por prompt")
+        add_cell(0, 4, "Concurrency", self.conc_var,    6,  "Prompts en paralelo")
 
+        # Fila 1
+        add_cell(1, 0, "Delay (s)",   self.delay_var,   6,  "Pausa entre llamadas")
+        add_cell(1, 2, "Seed",        self.seed_var,    10, "Semilla (-1 = aleatoria)")
+        add_cell(1, 4, "Temperature", self.temp_var,    6,  "Solo OpenAI / Stability")
+
+        # Fila 2
         chk = ttk.Checkbutton(frm_def, text="Randomize order", variable=self.rand_var)
-        chk.grid(row=r, column=1, sticky="w", padx=6, pady=3)
-        Tooltip(chk, "Barajar el orden de los prompts antes de ejecutar.")
+        chk.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+        Tooltip(chk, "Barajar el orden de los prompts")
 
-        ttk.Button(frm_def, text="Guardar config.yaml", command=self.on_save_cfg).grid(row=0, column=3, rowspan=2, padx=12)
+        ttk.Button(
+            frm_def,
+            text="Guardar config.yaml",
+            command=self.on_save_cfg
+        ).grid(row=2, column=4, columnspan=2, sticky="e", padx=6, pady=6)
 
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=12, pady=6)
 
@@ -290,6 +303,20 @@ class App(tb.Window if tb else tk.Tk):
                                          values=["automatic1111","openai","stability"], width=22)
         self.cmb_provider.pack(side="left", padx=8)
         self.cmb_provider.bind("<<ComboboxSelected>>", lambda e: self._on_provider_change())
+
+        PROVIDER_URLS = {
+            "automatic1111": "https://github.com/AUTOMATIC1111/stable-diffusion-webui",
+            "stability":     "https://platform.stability.ai/",
+            "openai":        "https://platform.openai.com/",
+        }
+
+        self.btn_provider_web = ttk.Button(
+            sel,
+            text="Abrir web",
+            command=lambda: webbrowser.open(PROVIDER_URLS.get(self.provider_var.get(), ""))
+        )
+        self.btn_provider_web.pack(side="left", padx=6)
+
 
         ttk.Button(sel, text="Guardar .env (API keys)", command=self.on_save_env).pack(side="left", padx=12)
 
@@ -303,53 +330,165 @@ class App(tb.Window if tb else tk.Tk):
 
         # --- AUTOMATIC1111 ---
         self.frm_auto_bg = tk.Frame(self.prov_container, bg=self.bg_auto, bd=1, relief="solid")
-        self.frm_auto = ttk.LabelFrame(self.frm_auto_bg, text="Automatic1111 (Stable Diffusion local)")
+        
+        # --- Bloque instalación / ayuda Automatic1111 ---
+        install_box = ttk.LabelFrame(
+            self.frm_auto_bg,
+            text="Instalación de Automatic1111 (Stable Diffusion en local)"
+        )
+        install_box.pack(fill="x", padx=8, pady=(0, 10))
+
+        msg = (
+            "Si ya tienes Automatic1111 instalado en otra ubicación, introduce la ruta correcta y la URL de la API.\n"
+            "Si no lo tienes instalado, o quieres reinstalarlo,puedes hacerlo automáticamente en la carpeta del proyecto."
+        )
+
+        lbl = ttk.Label(
+            install_box,
+            text=msg,
+            justify="left",
+            wraplength=760
+        )
+        lbl.pack(anchor="w", padx=10, pady=(6, 8))
+
+        btns = ttk.Frame(install_box)
+        btns.pack(anchor="w", padx=10, pady=(0, 8))
+
+        ttk.Button(
+            btns,
+            text="Instalar / Reinstalar Automatic1111",
+            command=self.on_install_a1111
+        ).pack(side="left")
+
+        ttk.Button(
+            btns,
+            text="Abrir repositorio (GitHub)",
+            command=lambda: webbrowser.open(
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui"
+            )
+        ).pack(side="left", padx=8)
+
+
+       # --- Bloque configuración Automatic1111 ---
+        self.frm_auto = ttk.LabelFrame(
+            self.frm_auto_bg,
+            text="Configuración Automatic1111 (Stable Diffusion local)"
+        )
+        self.frm_auto.columnconfigure(0, weight=0)
+        self.frm_auto.columnconfigure(1, weight=1)
+        self.frm_auto.columnconfigure(2, weight=0)
+        self.frm_auto.columnconfigure(3, weight=1)
+
         self.frm_auto.configure(style="Card.TLabelframe")
 
-        a = self.cfg.get("providers",{}).get("automatic1111",{})
-        self.auto_api_var     = tk.StringVar(value=a.get("api_base","http://127.0.0.1:7860"))
-        self.auto_sampler_var = tk.StringVar(value=a.get("sampler_name","DPM++ 2M Karras"))
-        self.auto_steps_var   = tk.StringVar(value=str(a.get("steps",32)))
-        self.auto_cfg_var     = tk.StringVar(value=str(a.get("cfg_scale",6.0)))
-        self.auto_seed_var    = tk.StringVar(value=str(a.get("seed",-1)))
+        a = self.cfg.get("providers", {}).get("automatic1111", {})
 
-        r=0
-        ttk.Label(self.frm_auto, text="API base").grid(row=r, column=0, sticky="w", padx=(6,2), pady=3)
-        e = ttk.Entry(self.frm_auto, textvariable=self.auto_api_var, width=40); e.grid(row=r, column=1, sticky="w", padx=6, pady=3)
-        Tooltip(e, "URL local de A1111 (http://127.0.0.1:7860)")
+        self.auto_api_var     = tk.StringVar(value=a.get("api_base", "http://127.0.0.1:7860"))
+        self.auto_sampler_var = tk.StringVar(value=a.get("sampler_name", "DPM++ 2M Karras"))
+        self.auto_steps_var   = tk.StringVar(value=str(a.get("steps", 32)))
+        self.auto_cfg_var     = tk.StringVar(value=str(a.get("cfg_scale", 6.0)))
 
-        r+=1
-        ttk.Label(self.frm_auto, text="Sampler").grid(row=r, column=0, sticky="w", padx=(6,2), pady=3)
-        self.cb_sampler = ttk.Combobox(self.frm_auto, textvariable=self.auto_sampler_var, width=28)
-        self.cb_sampler.grid(row=r, column=1, sticky="w", padx=6, pady=3)
-        Tooltip(self.cb_sampler, "Se rellena desde la API cuando está lista. También puedes escribir uno.")
+        def add_auto_cell(row, col, label, var, width, tip):
+            ttk.Label(
+                self.frm_auto,
+                text=label,
+                anchor="e"
+            ).grid(
+                row=row,
+                column=col,
+                sticky="e",
+                padx=(6, 2),
+                pady=2
+            )
 
-        r+=1
-        for (label, var, tip) in [
-            ("Steps", self.auto_steps_var, "Pasos de muestreo (más = más detalle/tiempo)."),
-            ("CFG",   self.auto_cfg_var,   "Escala de guía (6–8 típico)."),
-            ("Seed",  self.auto_seed_var,  "Semilla (-1 aleatoria).")
-        ]:
-            ttk.Label(self.frm_auto, text=label).grid(row=r, column=0, sticky="w", padx=(6,2), pady=3)
-            ent = ttk.Entry(self.frm_auto, textvariable=var, width=12); ent.grid(row=r, column=1, sticky="w", padx=6, pady=3)
+            ent = ttk.Entry(
+                self.frm_auto,
+                textvariable=var,
+                width=width
+            )
+            ent.grid(
+                row=row,
+                column=col + 1,
+                sticky="w",
+                padx=(0, 8),
+                pady=2
+            )
             Tooltip(ent, tip)
-            r+=1
+            return ent
 
+
+        # Fila 0
+        add_auto_cell(
+            0, 0,
+            "API base",
+            self.auto_api_var,
+            46,
+            "URL local de Automatic1111 (http://127.0.0.1:7860)"
+        )
+        add_auto_cell(
+            0, 2,
+            "Steps",
+            self.auto_steps_var,
+            8,
+            "Pasos de muestreo (más = más detalle / más tiempo)"
+        )
+
+        # Fila 1
+        ttk.Label(self.frm_auto, text="Sampler").grid(
+            row=1, column=0, sticky="w", padx=(3,2), pady=(2, 0)
+        )
+        self.cb_sampler = ttk.Combobox(
+            self.frm_auto,
+            textvariable=self.auto_sampler_var,
+            width=44
+        )
+        self.cb_sampler.grid(
+            row=1, column=1, sticky="w", padx=(0,12), pady=(2, 0)
+        )
+        Tooltip(
+            self.cb_sampler,
+            "Se rellena automáticamente desde la API cuando está disponible.\nTambién puedes escribir uno manualmente."
+        )
+
+        add_auto_cell(
+            1, 2,
+            "CFG",
+            self.auto_cfg_var,
+            8,
+            "Escala de guía (6–8 suele ser un buen rango)"
+        )
+
+        # --- Bloque control WebUI ---
         sub = ttk.LabelFrame(self.frm_auto, text="Stable Diffusion local")
-        sub.grid(row=r, column=0, columnspan=3, sticky="we", padx=4, pady=(6,2))
-        rsub=0
-        ttk.Label(sub, text="Carpeta Stable Diffusion WebUI:").grid(row=rsub, column=0, sticky="w", padx=6, pady=4)
-        self.webui_var = tk.StringVar(value=str(PROJECT/"stable-diffusion-webui"))
-        e = ttk.Entry(sub, textvariable=self.webui_var, width=62); e.grid(row=rsub, column=1, sticky="w", padx=6, pady=4)
-        Tooltip(e, "Ruta donde está clonado AUTOMATIC1111.")
-        ttk.Button(sub, text="Examinar", command=self.browse_webui).grid(row=rsub, column=2, padx=6, pady=4, sticky="w")
-        rsub+=1
-        ttk.Button(sub, text="Arrancar WebUI",  command=self.on_start_webui).grid(row=rsub, column=0, pady=4, padx=6, sticky="w")
-        ttk.Button(sub, text="Parar WebUI",     command=self.on_stop_webui).grid(row=rsub, column=1, pady=4, padx=6, sticky="w")
-        ttk.Button(sub, text="Probar API 7860", command=self.on_probe_api).grid(row=rsub, column=2, pady=4, padx=6, sticky="w")
-        ttk.Button(sub, text="Abrir WebUI",     command=lambda: webbrowser.open("http://127.0.0.1:7860")).grid(row=rsub, column=3, pady=4, padx=6, sticky="w")
+        sub.grid(row=2, column=0, columnspan=4, sticky="we", padx=6, pady=(10, 6))
+
+        rsub = 0
+        ttk.Label(sub, text="Carpeta Stable Diffusion WebUI:").grid(
+            row=rsub, column=0, sticky="w", padx=6, pady=4
+        )
+        self.webui_var = tk.StringVar(value=str(PROJECT / "stable-diffusion-webui"))
+        e = ttk.Entry(sub, textvariable=self.webui_var, width=62)
+        e.grid(row=rsub, column=1, sticky="w", padx=6, pady=4)
+        Tooltip(e, "Ruta donde está instalado AUTOMATIC1111")
+
+        ttk.Button(
+            sub,
+            text="Examinar",
+            command=self.browse_webui
+        ).grid(row=rsub, column=2, padx=6, pady=4, sticky="w")
+
+        rsub += 1
+        ttk.Button(sub, text="Arrancar WebUI",  command=self.on_start_webui).grid(row=rsub, column=0, padx=6, pady=4, sticky="w")
+        ttk.Button(sub, text="Parar WebUI",     command=self.on_stop_webui).grid(row=rsub, column=1, padx=6, pady=4, sticky="w")
+        ttk.Button(sub, text="Probar API 7860", command=self.on_probe_api).grid(row=rsub, column=2, padx=6, pady=4, sticky="w")
+        ttk.Button(
+            sub,
+            text="Abrir WebUI",
+            command=lambda: webbrowser.open("http://127.0.0.1:7860")
+        ).grid(row=rsub, column=3, padx=6, pady=4, sticky="w")
 
         self.frm_auto.pack(fill="x", padx=8, pady=8)
+
 
         # --- OPENAI ---
         self.frm_oai_bg = tk.Frame(self.prov_container, bg=self.bg_oai, bd=1, relief="solid")
@@ -480,17 +619,64 @@ class App(tb.Window if tb else tk.Tk):
             self.log(f"CSV seleccionado: {self.prompts_path}")
 
     # ---------- WebUI ----------
+    def on_install_a1111(self):
+        """
+        Lanza el instalador de Automatic1111 (bootstrap específico).
+        """
+        self.log("Iniciando instalación de Automatic1111…")
+
+        # buscamos bootstrap específico
+        script = PROJECT / "batchkit" / "bootstrap_automatic1111.ps1"
+        if not script.exists():
+            self.log("ERROR: No se encuentra bootstrap_automatic1111.ps1")
+            return
+
+        try:
+            subprocess.Popen(
+                [
+                    "cmd.exe",
+                    "/k",  # <- CLAVE: mantiene la consola abierta
+                    "powershell",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", str(script)
+                ],
+                cwd=str(PROJECT)
+            )
+            self.log("Instalador lanzado en una ventana separada.")
+        except Exception as e:
+            self.log(f"ERROR lanzando instalador: {e}")
+
+
     def on_start_webui(self):
+        webui_path = pathlib.Path(self.webui_var.get())
+        if not webui_path.exists():
+            self.log("❌ Automatic1111 no está instalado.")
+            self.log("Pulsa 'Instalar Automatic1111' o configura la ruta correctamente.")
+            return
+
+        bat = webui_path / "webui-user.bat"
+        if not bat.exists():
+            self.log("❌ Falta webui-user.bat. Automatic1111 no está inicializado.")
+            self.log("Pulsa 'Instalar Automatic1111' o configura la ruta correctamente.")
+            return
+
         if self.provider_var.get() != "automatic1111":
             self.log("WebUI solo aplica a 'automatic1111'."); return
         if not self.webui_var.get().strip():
             self.log("Selecciona la carpeta de Stable Diffusion WebUI."); return
+        webui_dir = pathlib.Path(self.webui_var.get())
+        if not (webui_dir / "webui-user.bat").exists():
+            self.log("Automatic1111 no parece estar instalado en esa ruta.")
+            self.log("Usa el botón 'Instalar / Reinstalar Automatic1111' o revisa la carpeta.")
+            return
         if self.webui_proc and self.webui_proc.poll() is None:
             self.log("WebUI ya está ejecutándose."); return
 
         # Antes de lanzar: siembra repos locales (si existen) y parchea URL rota
         seed_local_repos(self.webui_var.get(), self.log)
-        patch_a1111_repo_urls(self.webui_var.get(), self.log)
+        #patch_a1111_repo_urls(self.webui_var.get(), self.log)
 
         self.webui_proc = start_webui(self.webui_var.get(), self.log)
         self.log("Esperando API 7860…")
@@ -541,10 +727,6 @@ class App(tb.Window if tb else tk.Tk):
             c["default"]["seed"] = int(self.seed_var.get())
             t = self.temp_var.get().strip()
             c["default"]["temperature"] = None if t == "" else float(t)
-
-            for name in ["automatic1111", "openai", "stability"]:
-                c["providers"].setdefault(name, {})
-                c["providers"][name]["enabled"] = (name == self.provider_var.get())
 
             auto = c["providers"]["automatic1111"]
             auto["api_base"] = self.auto_api_var.get()
@@ -600,10 +782,13 @@ class App(tb.Window if tb else tk.Tk):
     def on_run_batch(self):
         if self.running_batch:
             self.log("Ya hay un lote en ejecución."); return
-        try:
-            ensure_venv_and_reqs(self.log)
-        except Exception as e:
-            self.log(f"ERROR preparando entorno: {e}")
+        if not self.env_ready:
+            try:
+                ensure_venv_and_reqs(self.log)
+                self.env_ready = True
+            except Exception as e:
+                self.log(f"ERROR preparando entorno: {e}")
+                return
 
         provider = self.provider_var.get()
         if provider == "automatic1111" and not self._autostart_a1111_if_needed():
@@ -626,43 +811,69 @@ class App(tb.Window if tb else tk.Tk):
             self.log("No hay lote en ejecución.")
 
     def on_test_image(self):
-        prompt = simpledialog.askstring("Test imagen", "Escribe un prompt para una sola imagen:")
-        if not prompt: return
+        prompt = simpledialog.askstring(
+            "Test imagen",
+            "Escribe un prompt para una sola imagen:"
+        )
+        if not prompt:
+            return
+
         try:
             ensure_venv_and_reqs(self.log)
         except Exception as e:
             self.log(f"ERROR preparando entorno: {e}")
+            return
 
         provider = self.provider_var.get()
         if provider == "automatic1111" and not self._autostart_a1111_if_needed():
             return
 
+        # CSV temporal
         tmp_csv = KIT / "_tmp_prompt.csv"
         tmp_csv.write_text(
             "id,category,subcat,language,style,actor,geo_scope,prompt\n"
             f"t1,,,,,,,{prompt.replace(',', ';')}\n",
             encoding="utf-8"
         )
+
         self.log("Generando 1 imagen de prueba…")
+
+        # Carpeta real de salida del test
+        test_out_root = _abs_out_from_gui(self.outdir_var.get()) / "test" / provider
 
         def _after():
             try:
+                pngs = list(test_out_root.rglob("*.png"))
+                if pngs:
+                    self.log(f"✓ Imagen generada correctamente ({len(pngs)} archivo/s).")
+                    self.log(f"Ruta: {pngs[0]}")
+                else:
+                    self.log("⚠️ El test terminó, pero no se encontró ninguna imagen.")
+            except Exception as e:
+                self.log(f"Aviso comprobando salida del test: {e}")
+
+            try:
                 if tmp_csv.exists():
                     tmp_csv.unlink()
-                    self.log("✓ Archivo temporal eliminado.")
-            except Exception as e:
-                self.log(f"Aviso: no pude borrar el temporal: {e}")
+            except Exception:
+                pass
+
             self.log("Fin test.")
 
         run_batch(
             self.log,
             provider=provider,
             size_override=self.size_var.get(),
-            prompts_path=str(tmp_csv.name),  # relativo a KIT (cwd del proceso hijo)
-            extra_args=["--repeats", "1", "--out", str(_abs_out_from_gui(self.outdir_var.get()))],
+            prompts_path=str(tmp_csv.name),
+            extra_args=[
+                "--repeats", "1",
+                "--out", str(_abs_out_from_gui(self.outdir_var.get()) / "test")
+            ],
             set_batch_proc=self.set_batch_proc,
             on_finish=_after
         )
+
+
 
     # ---------- salida ----------
     def open_out(self):
