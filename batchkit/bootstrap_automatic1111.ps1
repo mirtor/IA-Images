@@ -81,13 +81,11 @@ try {
 
     # ---------- GPU ----------
     $hasNvidia = Has-Nvidia
-    if ($hasNvidia) {
-        Write-Host "GPU NVIDIA detectada." -ForegroundColor Green
-        $args = "--api --xformers --medvram"
-    } else {
-        Write-Host "GPU NVIDIA NO detectada. Usando CPU." -ForegroundColor Yellow
-        $args = "--api --use-cpu all --no-half --no-half-vae --skip-torch-cuda-test"
-    }
+    $cmdArgs = if ($hasNvidia) {
+        "--api --xformers --medvram"
+        } else {
+        "--api --use-cpu all --no-half --no-half-vae --medvram --skip-torch-cuda-test"
+        }
 
     # ---------- webui-user.bat ----------
     $webuiUser = Join-Path $webuiDir "webui-user.bat"
@@ -97,7 +95,8 @@ try {
 set PYTHON=$PY
 set VENV_DIR=
 set COMMANDLINE_ARGS=$args
-set STABLE_DIFFUSION_REPO=https://github.com/CompVis/stable-diffusion.git
+REM Fuerza repo válido de Stable Diffusion (evita repo eliminado)
+set "STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git"
 call webui.bat
 "@ | Set-Content -Path $webuiUser -Encoding ASCII -Force
 

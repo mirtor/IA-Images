@@ -340,7 +340,9 @@ class App(tb.Window if tb else tk.Tk):
 
         msg = (
             "Si ya tienes Automatic1111 instalado en otra ubicación, introduce la ruta correcta y la URL de la API.\n"
-            "Si no lo tienes instalado, o quieres reinstalarlo,puedes hacerlo automáticamente en la carpeta del proyecto."
+            "Si no lo tienes instalado, o quieres reinstalarlo,puedes hacerlo automáticamente en la carpeta del proyecto. \n"
+            "   El primer Arranque de la WebUI finaliza el proceso de instalación. \n"
+            "   Se debe mantener abierta la ventana de símbolo de sistema con Stable Diffusion en segundo plano."
         )
 
         lbl = ttk.Label(
