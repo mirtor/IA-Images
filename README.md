@@ -1,13 +1,13 @@
 # IA‑Images (Windows)
 
-Interfaz sencilla para ejecutar lotes de generación de imágenes con **Stable Diffusion WebUI (AUTOMATIC1111)** o APIs (OpenAI/Stability). Pensado para que cualquier persona lo ponga en marcha con doble clic, sin instalar nada manualmente.
+Interfaz sencilla para ejecutar lotes de generación de imágenes con **Stable Diffusion WebUI (AUTOMATIC1111)** o APIs (OpenAI/Stability). Pensado para que cualquier persona lo ponga en marcha con doble clic, tratando de evitar instalaciones manualmente.
 
 ---
 
 ## ✅ Requisitos
 
 - **Windows 10/11** (64‑bit).
-- **Conexión a Internet** (recomendada). Si no hay, puedes incluir `vendors\stable-diffusion-webui` ya descomprimido.
+- **Conexión a Internet**.
 - **GPU NVIDIA** opcional. Si no hay, funciona en **CPU** (más lento).
 - Permisos para ejecutar **PowerShell** (el lanzador usa `ExecutionPolicy Bypass`).
 
@@ -19,23 +19,23 @@ Estructura recomendada del proyecto:
 
 ```
 IA-Images/
-├─ Start.bat
-├─ bootstrap.ps1                 # Bootstrap: instala Python, prepara WebUI y lanza la GUI
+├─ Start.bat                     # Lanza la GUI
+├─ prompts_template.csv          # Plantilla CSV de prompts
+├─ README.md                     # Archivo actual de descripción del proyecto
 ├─ vendors/                      # Recursos opcionales
 │  ├─ python-3.10.11-amd64.exe   # Instalador offline de Python 3.10 (opcional)
-│  └─ stable-diffusion-webui/    # Copia LOCAL descomprimida de A1111 (opcional)
-├─ stable-diffusion-webui/       # Se crea al primer inicio (si no existe)
+│  └─ Git-2.52.0-64bits.exe      # Instalador offline de Git 2.52 (opcional)
+├─ stable-diffusion-webui/       # Se crea en la instalación (si no existe)
+├─ out/                          # Se crea en la generación de imágenes (si no existe). Carpeta de salida.
 └─ batchkit/
    ├─ app_gui.py                 # La aplicación gráfica (Tkinter + ttkbootstrap)
+   ├─ bootstrap_min.ps1          # Bootstrap: instala Python, lanza la GUI
+   ├─ bootstrap_automatic111.ps1 # Bootstrap: Git y prepara WebUI
    ├─ generator.py               # Ejecuta los lotes
    ├─ config.yaml                # Config por defecto
-   ├─ prompts_template.csv       # Plantilla CSV de prompts
    ├─ requirements.txt           # Dependencias del kit
    └─ .venv/                     # Se crea automáticamente
 ```
-
-> **Ligero por defecto**: no hace falta incluir `stable-diffusion-webui` en el ZIP. Si está ausente, el **bootstrap** intentará descargarlo en tiempo de ejecución.  
-> Si **no** habrá Internet, incluye `vendors\stable-diffusion-webui` **descomprimido** y el bootstrap lo copiará automáticamente.
 
 ---
 
@@ -43,17 +43,21 @@ IA-Images/
 
 1. **Descomprime** el ZIP en una carpeta sin permisos especiales (p.ej. `C:\IA-Images`).  
 2. **Doble clic** en `Start.bat`.
-3. El **bootstrap** hará automáticamente:
-   - Buscar/instalar **Python 3.10** (usa el instalador local de `vendors` si está, o lo descarga).
-   - Preparar **Stable Diffusion WebUI**:
-     - Si existe `vendors\stable-diffusion-webui` → **lo copia** a `.\stable-diffusion-webui`.
-     - Si hay Internet y no existe copia local → **descarga ZIP** oficial y lo extrae.
+3. El **bootstrap_min** hará automáticamente:
+   - Buscar/instalar **Python 3.10** (usa el instalador local de `vendors`).
+   - **Lanzar** la interfaz gráfica `batchkit\app_gui.py` (con `pythonw`, sin consola).
+
+4. Desde la interfaz se puede instalar Automatic1111. El **bootstrap_automatic1111** hará automáticamente:
+     - Buscar/instalar **Python 3.10** (usa el instalador local de `vendors`. Versión obligatoria para usar Automatic1111).
+     - Descargar **Stable Diffusion WebUI**:
+     - Si hay Internet y no existe copia local → **descarga ZIP** oficial y lo extrae. (Error 128 esta solucionado por defecto).
    - Crear `stable-diffusion-webui\webui-user.bat` con:
      - **GPU NVIDIA**: `--api --xformers --medvram`
      - **Sin GPU**: `--api --use-cpu all --no-half --no-half-vae --medvram --skip-torch-cuda-test`
-   - Crear un **entorno virtual** `batchkit\.venv` e instalar dependencias.
-   - **Arrancar** Stable Diffusion WebUI en segundo plano.
-   - **Lanzar** la interfaz gráfica `batchkit\app_gui.py` (con `pythonw`, sin consola).
+
+5. Desdela interfaz se puede "Arrancar WebUI", hara automaticamente:
+   - Crear un **entorno virtual** `batchkit\.venv` e instalar dependencias (primera ejecución).
+   - **Arrancar** Stable Diffusion WebUI (mostrará un ventana en símbolo de sistema que debe permaneceer abierta y la interfaz en el navegador por defecto).
 
 > ⚠️ **Modelos**: copia tus modelos `.safetensors` a `stable-diffusion-webui\models\Stable-diffusion\`. Sin un modelo cargado, A1111 puede tardar más o no responder hasta que lo selecciones en la WebUI.
 
@@ -76,8 +80,8 @@ IA-Images/
 ### Proveedor
 - **automatic1111** (local). Muestra bloque para WebUI con:
   - **API base** (por defecto `http://127.0.0.1:7860`).
-  - **Sampler**, **Steps**, **CFG**, **Seed**.
-  - Botones: **Arrancar/Parar WebUI**, **Probar API 7860**, **Abrir WebUI** (navegador).
+  - **Sampler**, **Steps**, **CFG**.
+  - Botones: **Instalar/Reinstalar automatic1111**, **Arrancar/Parar WebUI**, **Probar API 7860**, **Abrir WebUI** (navegador).
 - **openai** / **stability**: campos de modelo/engine y **Guardar .env (API keys)**.
 
 ### Acciones
@@ -142,10 +146,10 @@ Cada línea incluye metadatos: `timestamp`, `provider`, `model/engine`, `size`, 
   El bootstrap configura modo **CPU** automáticamente (`--use-cpu all`). Será más lento, pero funciona.
 
 - **Git pide usuario/contraseña**  
-  No usamos Git para clonar por defecto: el bootstrap prioriza **carpeta local** o **ZIP** oficial.
+  Se usa Git para clonar por defecto, en la última actualización los repositorios son públicos.
 
 - **“ModuleNotFoundError: yaml”** u otros paquetes  
-  Asegúrate de ejecutar la GUI **siempre** a través de `Start.bat`/`bootstrap.ps1`, que crean el **venv** y instalan dependencias.
+  Asegúrate de ejecutar la GUI **siempre** a través de `Start.bat`/`bootstrap_min.ps1`, que crean el **venv**.
 
 - **Rutas con espacios**  
   El bootstrap **cita** las rutas críticas (PYTHON/ARGS). Si moviste carpetas, vuelve a ejecutar `Start.bat`.
