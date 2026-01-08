@@ -301,14 +301,22 @@ def main():
                 })
 
             except Exception as e:
+                err_txt = str(e)
+
                 meta_rows.append({
                     "timestamp": timestamp(),
                     "provider": args.provider,
-                    "error": str(e),
+                    "error": err_txt,
                     "prompt_id": prompt_id,
                     "replicate_index": rep + 1,
                     "prompt": prompt_text,
                 })
+
+                # Corte duro si Stability se queda sin créditos
+                if args.provider == "stability" and "sufficient credits" in err_txt.lower():
+                    write_jsonl(manifest_path, meta_rows)
+                    print("❌ Créditos de Stability agotados. Abortando lote.")
+                    return
             finally:
                 if rc.delay_seconds:
                     time.sleep(rc.delay_seconds)
@@ -317,7 +325,7 @@ def main():
                 write_jsonl(manifest_path, meta_rows)
                 meta_rows = []
 
-    print(f"Done. Manifest: {manifest_path}")
+    tqdm.write(f"Done. Manifest: {manifest_path}")
 
 if __name__ == "__main__":
     main()
