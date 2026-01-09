@@ -7,6 +7,7 @@
 # - Bloque de WebUI sólo visible con proveedor automatic1111
 # - Selector de CSV de prompts (por defecto PROJECT/prompts_template.csv)
 import os, sys, subprocess, threading, time, webbrowser, yaml, pathlib, requests, shutil, tkinter as tk
+from tkinter import messagebox
 from tkinter import filedialog, scrolledtext, simpledialog
 from tkinter import ttk
 
@@ -83,7 +84,7 @@ def patch_a1111_repo_urls(webui_dir, log):
             log("Parcheando URL del repo SD (Stability-AI -> CompVis)…")
             txt = txt.replace(old, new)
             lu.write_text(txt, encoding="utf-8")
-            log("✓ Parche aplicado.")
+            log("Parche aplicado.")
     except Exception as e:
         log(f"Aviso: no se pudo aplicar parche de repos: {e}")
 
@@ -121,7 +122,7 @@ def seed_local_repos(webui_dir, log):
             shutil.copytree(child, target)
             copied_any = True
         if copied_any:
-            log("✓ Repos locales copiados a webui/repositories.")
+            log("Repos locales copiados a webui/repositories.")
     except Exception as e:
         log(f"Aviso: no se pudieron sembrar repos locales: {e}")
 
@@ -185,7 +186,7 @@ def taskkill_tree(pid, log):
     try:
         subprocess.run(["taskkill","/F","/T","/PID",str(pid)], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        log(f"✓ Proceso {pid} terminado (árbol).")
+        log(f"Proceso {pid} terminado (árbol).")
     except Exception as e:
         log(f"ERROR al finalizar PID {pid}: {e}")
 
@@ -199,6 +200,7 @@ def run_batch(log, provider: str, size_override=None, set_batch_proc=None, on_fi
             cmd = [py,"generator.py","--provider",provider,"--prompts",prompts_path,"--config","config.yaml"]
             if size_override: cmd += ["--size", size_override]
             if extra_args:    cmd += list(extra_args)
+            log("")
             log(f"Lanzando lote con proveedor: {provider} …")
             proc = subprocess.Popen(cmd, cwd=str(KIT),
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -208,9 +210,11 @@ def run_batch(log, provider: str, size_override=None, set_batch_proc=None, on_fi
                 txt = line.decode(errors="ignore").rstrip()
                 if txt: log(txt)
             rc = proc.wait()
-            log("✓ Lote terminado." if rc==0 else f"ERROR: generator salió con código {rc}")
+            log("Lote terminado." if rc==0 else f"ERROR: generator salió con código {rc}")
+            log("")
         except Exception as e:
             log(f"ERROR: {e}")
+            log("")
         finally:
             if set_batch_proc: set_batch_proc(None)
             if on_finish: on_finish()
@@ -223,6 +227,10 @@ class App(tb.Window if tb else tk.Tk):
         else:  super().__init__()
         self.title("IA Images – Batchkit")
         self.geometry("1160x900")
+
+        self.cfg_dirty = False
+        def mark_dirty(*_):
+            self.cfg_dirty = True
 
         self.cfg  = read_cfg()
         self.envd = read_env()
@@ -271,6 +279,19 @@ class App(tb.Window if tb else tk.Tk):
             value="" if d.get("temperature") is None else str(d.get("temperature"))
         )
         self.rand_var    = tk.BooleanVar(value=bool(d.get("randomize_order",True)))
+
+        for v in (
+            self.size_var,
+            self.repeats_var,
+            self.conc_var,
+            self.delay_var,
+            self.seed_var,
+            self.temp_var,
+        ):
+            v.trace_add("write", mark_dirty)
+
+        self.rand_var.trace_add("write", mark_dirty)
+
 
         # Fila 0
         add_cell(0, 0, "Size",        self.size_var,    10, "Tamaño WxH (p. ej. 512x512)")
@@ -371,7 +392,7 @@ class App(tb.Window if tb else tk.Tk):
         ).pack(side="left", padx=8)
 
 
-       # --- Bloque configuración Automatic1111 ---
+      # --- Bloque configuración Automatic1111 ---
         self.frm_auto = ttk.LabelFrame(
             self.frm_auto_bg,
             text="Configuración Automatic1111 (Stable Diffusion local)"
@@ -389,6 +410,16 @@ class App(tb.Window if tb else tk.Tk):
         self.auto_sampler_var = tk.StringVar(value=a.get("sampler_name", "DPM++ 2M Karras"))
         self.auto_steps_var   = tk.StringVar(value=str(a.get("steps", 32)))
         self.auto_cfg_var     = tk.StringVar(value=str(a.get("cfg_scale", 6.0)))
+        self.auto_timeout_var = tk.StringVar(value=str(a.get("timeout_seconds", 900)))
+
+        for v in (
+            self.auto_api_var,
+            self.auto_sampler_var,
+            self.auto_steps_var,
+            self.auto_cfg_var,
+            self.auto_timeout_var,
+        ):
+            v.trace_add("write", mark_dirty)
 
         def add_auto_cell(row, col, label, var, width, tip):
             ttk.Label(
@@ -419,7 +450,7 @@ class App(tb.Window if tb else tk.Tk):
             return ent
 
 
-        # Fila 0
+        # -------- FILA 0 --------
         add_auto_cell(
             0, 0,
             "API base",
@@ -435,9 +466,9 @@ class App(tb.Window if tb else tk.Tk):
             "Pasos de muestreo (más = más detalle / más tiempo)"
         )
 
-        # Fila 1
+        # -------- FILA 1 --------
         ttk.Label(self.frm_auto, text="Sampler").grid(
-            row=1, column=0, sticky="w", padx=(3,2), pady=(2, 0)
+            row=1, column=0, sticky="w", padx=(6,2), pady=(2, 0)
         )
         self.cb_sampler = ttk.Combobox(
             self.frm_auto,
@@ -460,9 +491,18 @@ class App(tb.Window if tb else tk.Tk):
             "Escala de guía (6–8 suele ser un buen rango)"
         )
 
-        # --- Bloque control WebUI ---
+        # -------- FILA 2 (TIMEOUT) --------
+        add_auto_cell(
+            2, 0,
+            "Timeout (s)",
+            self.auto_timeout_var,
+            8,
+            "Tiempo máximo de espera HTTP por imagen. CPU puede tardar varios minutos."
+        )
+
+        # -------- FILA 3 (CONTROL WEBUI) --------
         sub = ttk.LabelFrame(self.frm_auto, text="Stable Diffusion local")
-        sub.grid(row=2, column=0, columnspan=4, sticky="we", padx=6, pady=(10, 6))
+        sub.grid(row=3, column=0, columnspan=4, sticky="we", padx=6, pady=(10, 6))
 
         rsub = 0
         ttk.Label(sub, text="Carpeta Stable Diffusion WebUI:").grid(
@@ -499,6 +539,8 @@ class App(tb.Window if tb else tk.Tk):
         self.oai_model_var   = tk.StringVar(value=oai.get("model","gpt-image-1"))
         self.env_oai_key_var = tk.StringVar(value=self.envd.get(OPENAI_ENV,""))
 
+        self.oai_model_var.trace_add("write", mark_dirty)
+
         ro=0
         ttk.Label(self.frm_oai, text="Model").grid(row=ro, column=0, sticky="w", padx=(6,2), pady=3)
         self.cb_oai_model = ttk.Combobox(self.frm_oai, textvariable=self.oai_model_var, width=28)
@@ -519,6 +561,9 @@ class App(tb.Window if tb else tk.Tk):
         self.stab_engine_var   = tk.StringVar(value=stab.get("engine","sd3"))
         self.stab_api_base_var = tk.StringVar(value=stab.get("api_base","https://api.stability.ai"))
         self.env_stab_key_var  = tk.StringVar(value=self.envd.get(STAB_ENV,""))
+
+        self.stab_engine_var.trace_add("write", mark_dirty)
+        self.stab_api_base_var.trace_add("write", mark_dirty)
 
         rs=0
         ttk.Label(self.frm_stab, text="Engine").grid(row=rs, column=0, sticky="w", padx=(6,2), pady=3)
@@ -637,7 +682,7 @@ class App(tb.Window if tb else tk.Tk):
             subprocess.Popen(
                 [
                     "cmd.exe",
-                    "/k",  # <- CLAVE: mantiene la consola abierta
+                    "/c",
                     "powershell",
                     "-NoLogo",
                     "-NoProfile",
@@ -654,13 +699,13 @@ class App(tb.Window if tb else tk.Tk):
     def on_start_webui(self):
         webui_path = pathlib.Path(self.webui_var.get())
         if not webui_path.exists():
-            self.log("❌ Automatic1111 no está instalado.")
+            self.log("Automatic1111 no está instalado.")
             self.log("Pulsa 'Instalar Automatic1111' o configura la ruta correctamente.")
             return
 
         bat = webui_path / "webui-user.bat"
         if not bat.exists():
-            self.log("❌ Falta webui-user.bat. Automatic1111 no está inicializado.")
+            self.log("Falta webui-user.bat. Automatic1111 no está inicializado.")
             self.log("Pulsa 'Instalar Automatic1111' o configura la ruta correctamente.")
             return
 
@@ -703,7 +748,7 @@ class App(tb.Window if tb else tk.Tk):
 
     def on_probe_api(self):
         base = self.auto_api_var.get().strip() or "http://127.0.0.1:7860"
-        self.log("API viva ✓" if api_alive(base) else "API no responde ✗")
+        self.log("API viva" if api_alive(base) else "API no responde")
 
     # ---------- Guardar config / env ----------
     def on_save_cfg(self):
@@ -735,7 +780,8 @@ class App(tb.Window if tb else tk.Tk):
             auto["sampler_name"] = self.auto_sampler_var.get()
             auto["steps"] = int(self.auto_steps_var.get())
             auto["cfg_scale"] = float(self.auto_cfg_var.get())
-            auto["seed"] = int(self.auto_seed_var.get() or -1)
+            auto["timeout_seconds"] = max(30, int(self.auto_timeout_var.get() or 900))
+
 
             oai = c["providers"]["openai"]
             oai["model"] = self.oai_model_var.get()
@@ -747,9 +793,14 @@ class App(tb.Window if tb else tk.Tk):
             stab["api_key_env"] = STAB_ENV
 
             write_cfg(c)
-            self.log(f"✓ config.yaml guardado. out_dir = {c['default']['out_dir']}")
+            self.log("")
+            self.log(f"config.yaml guardado. out_dir = {c['default']['out_dir']}")
+            self.log("")
+            self.cfg_dirty = False
         except Exception as e:
+            self.log("")
             self.log(f"ERROR guardando config: {e}")
+            self.log("")
 
     def on_save_env(self):
         try:
@@ -757,9 +808,13 @@ class App(tb.Window if tb else tk.Tk):
             d[OPENAI_ENV] = self.env_oai_key_var.get()
             d[STAB_ENV]   = self.env_stab_key_var.get()
             write_env(d)
-            self.log("✓ .env guardado.")
+            self.log("")
+            self.log(".env guardado.")
+            self.log("")
         except Exception as e:
+            self.log("")
             self.log(f"ERROR guardando .env: {e}")
+            self.log("")
 
     # ---------- Lote ----------
     def set_batch_proc(self, proc):
@@ -782,6 +837,14 @@ class App(tb.Window if tb else tk.Tk):
         return False
 
     def on_run_batch(self):
+        if self.cfg_dirty:
+            messagebox.showwarning(
+                "Configuración sin guardar",
+                "Has modificado la configuración pero no la has guardado.\n\n"
+                "Pulsa 'Guardar config.yaml' antes de ejecutar el lote."
+            )
+            return
+
         if self.running_batch:
             self.log("Ya hay un lote en ejecución."); return
         if not self.env_ready:
@@ -801,7 +864,6 @@ class App(tb.Window if tb else tk.Tk):
             provider=provider,
             size_override=self.size_var.get(),
             set_batch_proc=self.set_batch_proc,
-            on_finish=lambda: self.log("Fin de lote."),
             extra_args=["--out", str(_abs_out_from_gui(self.outdir_var.get()))],
             prompts_path=str(self.prompts_path)
         )
@@ -813,13 +875,21 @@ class App(tb.Window if tb else tk.Tk):
             self.log("No hay lote en ejecución.")
 
     def on_test_image(self):
+        if self.cfg_dirty:
+            messagebox.showwarning(
+                "Configuración sin guardar",
+                "Has modificado la configuración pero no la has guardado.\n\n"
+                "Pulsa 'Guardar config.yaml' antes de ejecutar el test."
+            )
+            return
+
         prompt = simpledialog.askstring(
             "Test imagen",
             "Escribe un prompt para una sola imagen:"
         )
         if not prompt:
             return
-
+        
         try:
             ensure_venv_and_reqs(self.log)
         except Exception as e:
@@ -847,10 +917,10 @@ class App(tb.Window if tb else tk.Tk):
             try:
                 pngs = list(test_out_root.rglob("*.png"))
                 if pngs:
-                    self.log(f"✓ Imagen generada correctamente ({len(pngs)} archivo/s).")
+                    self.log(f"Imagen generada correctamente ({len(pngs)} archivo/s).")
                     self.log(f"Ruta: {pngs[0]}")
                 else:
-                    self.log("⚠️ El test terminó, pero no se encontró ninguna imagen.")
+                    self.log("El test terminó, pero no se encontró ninguna imagen.")
             except Exception as e:
                 self.log(f"Aviso comprobando salida del test: {e}")
 

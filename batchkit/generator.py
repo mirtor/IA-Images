@@ -54,6 +54,7 @@ class ProviderConfig:
     sampler_name: Optional[str] = None
     steps: Optional[int] = None
     cfg_scale: Optional[float] = None
+    timeout_seconds: Optional[int] = None
 
 def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
@@ -157,7 +158,7 @@ def gen_stability(
     raise RuntimeError(f"Stability API error: {err}")
 
 
-def gen_automatic1111(prompt: str, size: str, api_base: str, sampler_name: str, steps: int, cfg_scale: float, seed: int) -> Dict[str, Any]:
+def gen_automatic1111(prompt: str, size: str, api_base: str, sampler_name: str, steps: int, cfg_scale: float, seed: int, timeout: int) -> Dict[str, Any]:
     w, h = (int(x) for x in size.split("x"))
     url = f"{api_base}/sdapi/v1/txt2img"
     payload = {
@@ -165,7 +166,8 @@ def gen_automatic1111(prompt: str, size: str, api_base: str, sampler_name: str, 
         "sampler_name": sampler_name, "steps": steps,
         "cfg_scale": cfg_scale, "seed": seed if seed is not None else -1, "batch_size": 1
     }
-    r = requests.post(url, json=payload, timeout=300)
+    timeout = timeout if timeout is not None else 900
+    r = requests.post(url, json=payload, timeout=timeout)
     r.raise_for_status()
     data = r.json()
     if "images" not in data or not data["images"]:
@@ -174,15 +176,36 @@ def gen_automatic1111(prompt: str, size: str, api_base: str, sampler_name: str, 
     img_bytes = base64.b64decode(img_b64)
     return {"image_bytes": img_bytes, "raw_response": data}
 
+
+def validate_provider(provider: str, pc: ProviderConfig):
+    if provider == "openai":
+        key = os.getenv(pc.api_key_env or "OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError("Missing OPENAI_API_KEY env var.")
+
+    elif provider == "stability":
+        key = os.getenv(pc.api_key_env or "STABILITY_API_KEY")
+        if not key:
+            raise RuntimeError("Missing STABILITY_API_KEY env var.")
+
+    elif provider == "automatic1111":
+        base = pc.api_base or "http://127.0.0.1:7860"
+        try:
+            r = requests.get(f"{base}/sdapi/v1/progress", timeout=2)
+            r.raise_for_status()
+        except Exception:
+            raise RuntimeError(f"Automatic1111 API not reachable at {base}")
+
+
 # ---------- Runner ----------
 def main():
-    parser = argparse.ArgumentParser(description="Batch image generation for bias study")
-    parser.add_argument("--provider", required=True, choices=["openai","stability","automatic1111"], help="Which provider to use")
-    parser.add_argument("--config", default="config.yaml", help="YAML config file")
-    parser.add_argument("--prompts", default="prompts.csv", help="CSV with prompts")
-    parser.add_argument("--out", default=None, help="Output directory (overrides config)")
-    parser.add_argument("--repeats", type=int, default=None, help="Times to repeat each prompt (overrides config)")
-    parser.add_argument("--size", default=None, help="Image size, e.g. 1024x1024 (overrides config)")
+    parser = argparse.ArgumentParser(description="Batch image generation")
+    parser.add_argument("--provider", required=True, choices=["openai","stability","automatic1111"])
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--prompts", default="prompts.csv")
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--repeats", type=int, default=None)
+    parser.add_argument("--size", default=None)
     args = parser.parse_args()
 
     if yaml is None:
@@ -193,6 +216,7 @@ def main():
 
     run = cfg.get("default", {})
     cfg_out = args.out if args.out is not None else run.get("out_dir", "out")
+
     rc = RunConfig(
         out_dir = cfg_out,
         repeats = args.repeats or int(run.get("repeats", 3)),
@@ -206,6 +230,7 @@ def main():
 
     providers = cfg.get("providers", {})
     pconf = providers.get(args.provider, {})
+
     pc = ProviderConfig(
         model = pconf.get("model"),
         api_key_env = pconf.get("api_key_env"),
@@ -214,63 +239,104 @@ def main():
         sampler_name = pconf.get("sampler_name"),
         steps = pconf.get("steps"),
         cfg_scale = pconf.get("cfg_scale"),
+        timeout_seconds = pconf.get("timeout_seconds", 900),
     )
 
+    # -------- VALIDACIÓN PREVIA (FAIL FAST) --------
+    out_root = os.path.join(resolve_out_dir(rc.out_dir), args.provider)
+    ensure_dir(out_root)
+    manifest_path = os.path.join(out_root, "manifest.jsonl")
+
+    try:
+        validate_provider(args.provider, pc)
+    except Exception as e:
+        write_jsonl(manifest_path, [{
+            "timestamp": timestamp(),
+            "provider": args.provider,
+            "error": str(e),
+            "fatal": True
+        }])
+        print(f"\nError: {e}")
+        print(f"Manifest: {manifest_path}")
+        return
+
+    # -------- CARGA DE PROMPTS --------
     prompts = load_prompts_csv(args.prompts)
     if rc.randomize_order:
         random.shuffle(prompts)
 
-    out_root = os.path.join(resolve_out_dir(rc.out_dir), args.provider)
-    ensure_dir(out_root)
-    manifest_path = os.path.join(out_root, "manifest.jsonl")
     meta_rows: List[Dict[str, Any]] = []
 
-    for idx, pr in enumerate(tqdm(prompts, desc="Prompts"), start=1):
+    # -------- LOOP PRINCIPAL --------
+    USE_TQDM = sys.stdout.isatty()
+    iterator = (
+        tqdm(prompts, desc="Prompts", dynamic_ncols=True, leave=True)
+        if USE_TQDM
+        else prompts
+    )
+
+    for idx, pr in enumerate(iterator, start=1):
         prompt_id = pr.get("id") or pr.get("prompt_id") or f"prompt{idx}"
+
+        if USE_TQDM:
+            tqdm.write("")
+            tqdm.write(f"Procesando prompt {idx}/{len(prompts)}: {prompt_id}")
+        else:
+            print(f"\nProcesando prompt {idx}/{len(prompts)}: {prompt_id}")
+
+        prompt_text = (pr.get("prompt") or "").strip()
+        if not prompt_text:
+            write_jsonl(manifest_path, [{
+                "timestamp": timestamp(),
+                "provider": args.provider,
+                "error": "Empty prompt",
+                "prompt_id": prompt_id,
+                "fatal": False
+            }])
+            continue
+
         prompt_dir = os.path.join(out_root, safe_name(prompt_id))
         ensure_dir(prompt_dir)
 
         for rep in range(rc.repeats):
-            prompt_text = (pr.get("prompt") or "").strip()
-            if not prompt_text:
-                meta_rows.append({
-                    "timestamp": timestamp(),
-                    "provider": args.provider,
-                    "error": "Empty prompt",
-                    "prompt_id": prompt_id,
-                    "replicate_index": rep + 1,
-                    "prompt": "",
-                })
-                continue
-
             t0 = time.time()
             try:
                 if args.provider == "openai":
                     api_key = os.getenv(pc.api_key_env or "OPENAI_API_KEY")
                     if not api_key:
                         raise RuntimeError("Missing OPENAI_API_KEY env var.")
-                    out = gen_openai(prompt_text, rc.size, pc.model or "gpt-image-1", api_key)
+
+                    out = gen_openai(
+                        prompt_text,
+                        rc.size,
+                        pc.model or "gpt-image-1",
+                        api_key
+                    )
 
                 elif args.provider == "stability":
                     api_key = os.getenv(pc.api_key_env or "STABILITY_API_KEY")
                     if not api_key:
                         raise RuntimeError("Missing STABILITY_API_KEY env var.")
+
                     out = gen_stability(
-                        prompt_text, rc.size,
+                        prompt_text,
+                        rc.size,
                         pc.engine or "sd3",
                         pc.api_base or "https://api.stability.ai",
                         api_key,
                         seed=rc.seed
                     )
 
-                elif args.provider == "automatic1111":
+                else:  # automatic1111
                     out = gen_automatic1111(
-                        prompt_text, rc.size,
+                        prompt_text,
+                        rc.size,
                         pc.api_base or "http://127.0.0.1:7860",
                         pc.sampler_name or "DPM++ 2M Karras",
                         int(pc.steps or 30),
                         float(pc.cfg_scale or 6.5),
-                        rc.seed if rc.seed is not None else -1
+                        rc.seed if rc.seed is not None else -1,
+                        pc.timeout_seconds or 900
                     )
 
                 img_bytes = out["image_bytes"]
@@ -279,53 +345,94 @@ def main():
                 fpath = os.path.join(prompt_dir, fname)
                 save_image_bytes(img_bytes, fpath)
 
-                meta_rows.append({
+                write_jsonl(manifest_path, [{
                     "timestamp": timestamp(),
                     "provider": args.provider,
-                    "model": pc.model or pc.engine or pc.sampler_name or "unknown",
-                    "size": rc.size,
                     "prompt_id": prompt_id,
-                    "prompt_category": pr.get("category"),
-                    "prompt_subcat": pr.get("subcat"),
-                    "language": pr.get("language"),
-                    "style": pr.get("style"),
-                    "actor": pr.get("actor"),
-                    "geo_scope": pr.get("geo_scope"),
-                    "prompt": prompt_text,
                     "replicate_index": rep + 1,
-                    "seed": rc.seed,
                     "sha256_16": img_hash,
                     "file_path": fpath,
-                    "raw_response_meta": out.get("raw_response", {}),
                     "latency_seconds": round(time.time() - t0, 3),
-                })
+                }])
 
             except Exception as e:
                 err_txt = str(e)
+                err_l = err_txt.lower()
 
-                meta_rows.append({
+                write_jsonl(manifest_path, [{
                     "timestamp": timestamp(),
                     "provider": args.provider,
                     "error": err_txt,
                     "prompt_id": prompt_id,
                     "replicate_index": rep + 1,
-                    "prompt": prompt_text,
-                })
+                    "fatal": False
+                }])
 
-                # Corte duro si Stability se queda sin créditos
-                if args.provider == "stability" and "sufficient credits" in err_txt.lower():
-                    write_jsonl(manifest_path, meta_rows)
-                    print("❌ Créditos de Stability agotados. Abortando lote.")
+                # -------- ERRORES FATALES POR PROVEEDOR --------
+
+                # STABILITY: créditos / pago
+                if args.provider == "stability":
+                    fatal_markers = (
+                        "sufficient credits",
+                        "lack sufficient credits",
+                        "payment_required",
+                        "purchase more credits",
+                        "402"
+                    )
+                    if any(m in err_l for m in fatal_markers):
+                        write_jsonl(manifest_path, [{
+                            "timestamp": timestamp(),
+                            "provider": args.provider,
+                            "error": "Stability API credits exhausted",
+                            "fatal": True
+                        }])
+                        print("RuntimeError: Stability API credits exhausted. Aborting batch.")
+                        return
+
+                # OPENAI: cuota / billing / créditos
+                if args.provider == "openai":
+                    fatal_markers = (
+                        "insufficient_quota",
+                        "exceeded your current quota",
+                        "billing",
+                        "payment",
+                        "quota",
+                        "402"
+                    )
+                    if any(m in err_l for m in fatal_markers):
+                        write_jsonl(manifest_path, [{
+                            "timestamp": timestamp(),
+                            "provider": args.provider,
+                            "error": "OpenAI quota or billing limit reached",
+                            "fatal": True
+                        }])
+                        print("RuntimeError: OpenAI quota or billing limit reached. Aborting batch.")
+                        return
+
+                # OPENAI: API key inválida / ausente
+                if args.provider == "openai" and (
+                    "invalid api key" in err_l
+                    or "incorrect api key" in err_l
+                    or "no api key" in err_l
+                    or "missing openai_api_key" in err_l
+                ):
+                    write_jsonl(manifest_path, [{
+                        "timestamp": timestamp(),
+                        "provider": args.provider,
+                        "error": "Invalid or missing OpenAI API key",
+                        "fatal": True
+                    }])
+                    print("RuntimeError: Invalid or missing OpenAI API key. Aborting batch.")
                     return
+
             finally:
                 if rc.delay_seconds:
                     time.sleep(rc.delay_seconds)
 
-            if meta_rows:
-                write_jsonl(manifest_path, meta_rows)
-                meta_rows = []
+    print("\nDone.")
+    print(f"Manifest: {manifest_path}")
 
-    tqdm.write(f"Done. Manifest: {manifest_path}")
+
 
 if __name__ == "__main__":
     main()

@@ -94,7 +94,7 @@ try {
 @echo off
 set PYTHON=$PY
 set VENV_DIR=
-set COMMANDLINE_ARGS=$args
+set COMMANDLINE_ARGS=$cmdArgs
 REM Fuerza repo válido de Stable Diffusion (evita repo eliminado)
 set "STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git"
 call webui.bat
@@ -115,6 +115,7 @@ call webui.bat
     Write-Host ""
     Write-Host "Pulsa cualquier tecla para cerrar..."
     [void][System.Console]::ReadKey($true)
+    exit 0
 }
 catch {
     Write-Host ""
