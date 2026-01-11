@@ -84,6 +84,85 @@ if (-not $PY) {
 Write-Host "Python listo: $PY" -ForegroundColor Green
 
 # --------------------------------------------------
+# Got 2.52
+# --------------------------------------------------
+function Get-Git {
+    try {
+        $p = Start-Process "git" -ArgumentList "--version" -NoNewWindow -Wait -PassThru
+        if ($p.ExitCode -eq 0) {
+            return (Get-Command git).Source
+        }
+    } catch {}
+    return $null
+}
+
+# --------------------------------------------------
+# Git (OBLIGATORIO para Automatic1111)
+# --------------------------------------------------
+function Install-Git {
+    $gitInstaller = Join-Path $vendors "Git-2.52.0-64-bit.exe"
+    if (-not (Test-Path $gitInstaller)) {
+        Write-Host ""
+        Write-Host "ERROR: Git no está instalado y no se encuentra el instalador en vendors." -ForegroundColor Red
+        Write-Host "Se esperaba:" -ForegroundColor Yellow
+        Write-Host $gitInstaller -ForegroundColor Cyan
+        Write-Host ""
+        exit 1
+    }
+
+    Write-Host "Instalando Git (silencioso)..." -ForegroundColor Yellow
+
+    Start-Process -FilePath $gitInstaller `
+        -ArgumentList '/VERYSILENT','/NORESTART','/NOCANCEL','/SP-','/SUPPRESSMSGBOXES' `
+        -Wait
+}
+
+$GIT = Get-Git
+if (-not $GIT) {
+    Install-Git
+    $GIT = Get-Git
+}
+
+if (-not $GIT) {
+    Write-Host ""
+    Write-Host "ERROR: Git no pudo instalarse correctamente." -ForegroundColor Red
+    Write-Host "Reinicia sesión o el sistema y vuelve a ejecutar." -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+
+Write-Host "Git listo: $GIT" -ForegroundColor Green
+
+
+# --------------------------------------------------
+# Auto-update del repo (seguro)
+# --------------------------------------------------
+if (Test-Path (Join-Path $root ".git")) {
+    try {
+        git fetch origin | Out-Null
+
+        $local  = git rev-parse HEAD
+        $remote = git rev-parse origin/main
+
+        if ($local -ne $remote) {
+            Write-Host "Actualización disponible del proyecto." -ForegroundColor Yellow
+            Write-Host "Aplicando actualización..." -ForegroundColor Cyan
+
+            $updater = Join-Path $kit "update_repo.ps1"
+            if (Test-Path $updater) {
+                Start-Process powershell `
+                    -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updater,"-RepoRoot",$root `
+                    -Wait
+                exit 0
+            }
+        }
+    } catch {
+        Write-Host "Aviso: no se pudo comprobar actualización del repo." -ForegroundColor Yellow
+    }
+}
+
+
+# --------------------------------------------------
 # venv del batchkit
 # --------------------------------------------------
 $venvDir = Join-Path $kit ".venv"
