@@ -31,6 +31,7 @@ IA-Images/
    ├─ app_gui.py                 # La aplicación gráfica (Tkinter + ttkbootstrap)
    ├─ bootstrap_min.ps1          # Bootstrap: instala Python, lanza la GUI
    ├─ bootstrap_automatic111.ps1 # Bootstrap: Git y prepara WebUI
+   ├─ update_repo.ps1            # Bootstrap: Git check y auto update repositorio
    ├─ generator.py               # Ejecuta los lotes
    ├─ config.yaml                # Config por defecto
    ├─ requirements.txt           # Dependencias del kit
@@ -45,6 +46,8 @@ IA-Images/
 2. **Doble clic** en `Start.bat`.
 3. El **bootstrap_min** hará automáticamente:
    - Buscar/instalar **Python 3.10** (usa el instalador local de `vendors`).
+   - Buscar/instalar **Git 2.52** (usa el instalador local de `vendors`).
+   - Chequea si existen actualizaciones en el repositorio y auto actualiza.
    - **Lanzar** la interfaz gráfica `batchkit\app_gui.py` (con `pythonw`, sin consola).
 
 4. Desde la interfaz se puede instalar Automatic1111. El **bootstrap_automatic1111** hará automáticamente:
