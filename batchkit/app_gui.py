@@ -167,9 +167,19 @@ def start_webui(webui_dir, log):
     if not bat.exists():
         log("ERROR: no encuentro webui-user.bat en esa carpeta.")
         return None
-    log("Arrancando Stable Diffusion WebUI…")
-    return subprocess.Popen(['cmd','/c','call',str(bat)], cwd=str(webui_dir),
-                            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+
+    log("Arrancando Stable Diffusion WebUI (consola visible)…")
+
+    return subprocess.Popen(
+        [
+            "cmd.exe",
+            "/k",
+            "call",
+            str(bat)
+        ],
+        cwd=str(webui_dir),
+        creationflags=subprocess.CREATE_NEW_CONSOLE
+    )
 
 def wait_api_ready(api_base, seconds=60, log=lambda *_: None):
     for _ in range(seconds):
@@ -682,14 +692,15 @@ class App(tb.Window if tb else tk.Tk):
             subprocess.Popen(
                 [
                     "cmd.exe",
-                    "/c",
+                    "/k",
                     "powershell",
                     "-NoLogo",
                     "-NoProfile",
                     "-ExecutionPolicy", "Bypass",
                     "-File", str(script)
                 ],
-                cwd=str(PROJECT)
+                cwd=str(PROJECT),
+                creationflags=subprocess.CREATE_NEW_CONSOLE
             )
             self.log("Instalador lanzado en una ventana separada.")
         except Exception as e:
