@@ -121,7 +121,7 @@ call webui.bat
 
     Write-Host "Instalacion de Automatic1111 COMPLETADA." -ForegroundColor Green
     Write-Host ""
-    Write-Host "Pulsa cualquier tecla para cerrar..."
+    Write-Host "Puedes cerrar esta ventana..."
     [void][System.Console]::ReadKey($true)
     exit 0
 }
@@ -130,7 +130,7 @@ catch {
     Write-Host "ERROR durante la instalacion" -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
     Write-Host ""
-    Write-Host "Pulsa cualquier tecla para cerrar..."
+    Write-Host "uedes cerrar esta ventana..."
     [void][System.Console]::ReadKey($true)
     exit 1
 }
