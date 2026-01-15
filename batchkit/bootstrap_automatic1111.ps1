@@ -88,11 +88,19 @@ try {
         }
 
     # ---------- webui-user.bat ----------
+    $PY_SHORT = (Get-Item $PY).FullName
+        try {
+            $PY_SHORT = (Get-Item $PY).FullName
+            $PY_SHORT = (cmd /c "for %I in (`"$PY_SHORT`") do @echo %~sI").Trim()
+        } catch {
+            $PY_SHORT = $PY
+        }
+
     $webuiUser = Join-Path $webuiDir "webui-user.bat"
 
 @"
 @echo off
-set "PYTHON=$PY"
+set "PYTHON=$PY_SHORT"
 set VENV_DIR=
 set COMMANDLINE_ARGS=$cmdArgs
 REM Fuerza repo válido de Stable Diffusion (evita repo eliminado)
