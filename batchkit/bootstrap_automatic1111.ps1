@@ -92,7 +92,7 @@ try {
 
 @"
 @echo off
-set PYTHON=$PY
+set "PYTHON=$PY"
 set VENV_DIR=
 set COMMANDLINE_ARGS=$cmdArgs
 REM Fuerza repo válido de Stable Diffusion (evita repo eliminado)
